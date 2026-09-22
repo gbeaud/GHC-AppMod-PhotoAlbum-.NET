@@ -1,398 +1,919 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
   "contentVersion": "1.0.0.0",
   "metadata": {
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "5251371063207372097"
+      "templateHash": "12202329681581781603"
     },
-    "description": "Provisions Azure resources for PhotoAlbum web application with Container Apps, SQL Database, and Blob Storage.",
-    "name": "PhotoAlbum Cloud Infrastructure",
-    "version": "1.0.0"
+    "description": "PhotoAlbum Azure infrastructure deployed with Azure CLI and Bicep."
   },
   "parameters": {
     "environmentName": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 64,
-      "metadata": {
-        "description": "Name of the environment (e.g., dev, test, prod)"
-      }
+      "minLength": 2,
+      "maxLength": 20
     },
     "location": {
       "type": "string",
-      "defaultValue": "[resourceGroup().location]",
-      "metadata": {
-        "description": "Primary location for all resources"
-      }
+      "defaultValue": "[resourceGroup().location]"
     },
     "webImageName": {
       "type": "string",
       "defaultValue": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
       "metadata": {
-        "description": "Container image name for the web service (set by azd deploy)"
+        "description": "Container image to run until the application image is published."
       }
     },
     "sqlAdminUsername": {
       "type": "string",
-      "defaultValue": "sqladmin",
-      "minLength": 1,
-      "maxLength": 128,
-      "metadata": {
-        "description": "SQL Server admin username"
-      }
+      "defaultValue": "sqladmin"
     },
     "sqlAdminPassword": {
       "type": "securestring",
-      "minLength": 8,
-      "maxLength": 128,
-      "metadata": {
-        "description": "SQL Server admin password"
-      }
+      "minLength": 8
     }
   },
   "variables": {
-    "resourceToken": "[toLower(uniqueString(subscription().id, resourceGroup().id, parameters('location'), parameters('environmentName')))]",
+    "token": "[toLower(uniqueString(subscription().id, resourceGroup().id, parameters('environmentName')))]",
     "tags": {
-      "azd-env-name": "[parameters('environmentName')]",
+      "application": "PhotoAlbum",
+      "environment": "[parameters('environmentName')]",
+      "managedBy": "bicep",
       "SecurityControl": "Ignore"
-    },
-    "sqlServerName": "[format('azsql{0}', variables('resourceToken'))]",
-    "sqlServerFqdn": "[format('{0}{1}', variables('sqlServerName'), environment().suffixes.sqlServerHostname)]",
-    "sqlConnectionString": "[format('Server=tcp:{0},1433;Initial Catalog=PhotoAlbumDb;Authentication=Active Directory Default;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;', variables('sqlServerFqdn'))]"
+    }
   },
-  "resources": [
-    {
-      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-      "apiVersion": "2023-01-31",
-      "name": "[format('azuai{0}', variables('resourceToken'))]",
-      "location": "[parameters('location')]",
-      "tags": "[variables('tags')]"
-    },
-    {
-      "type": "Microsoft.OperationalInsights/workspaces",
-      "apiVersion": "2022-10-01",
-      "name": "[format('azlog{0}', variables('resourceToken'))]",
-      "location": "[parameters('location')]",
+  "resources": {
+    "identity": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "managed-identity",
       "properties": {
-        "sku": {
-          "name": "PerGB2018"
+        "expressionEvaluationOptions": {
+          "scope": "inner"
         },
-        "retentionInDays": 30
-      },
-      "tags": "[variables('tags')]"
-    },
-    {
-      "type": "Microsoft.App/managedEnvironments",
-      "apiVersion": "2023-05-01",
-      "name": "[format('azaca{0}', variables('resourceToken'))]",
-      "location": "[parameters('location')]",
-      "properties": {
-        "appLogsConfiguration": {
-          "destination": "log-analytics",
-          "logAnalyticsConfiguration": {
-            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', format('azlog{0}', variables('resourceToken'))), '2022-10-01').customerId]",
-            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', format('azlog{0}', variables('resourceToken'))), '2022-10-01').primarySharedKey]"
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[format('azuai{0}', variables('token'))]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
           }
         },
-        "workloadProfiles": [
-          {
-            "name": "Consumption",
-            "workloadProfileType": "Consumption"
-          }
-        ]
-      },
-      "tags": "[variables('tags')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.OperationalInsights/workspaces', format('azlog{0}', variables('resourceToken')))]"
-      ]
-    },
-    {
-      "type": "Microsoft.ContainerRegistry/registries",
-      "apiVersion": "2023-07-01",
-      "name": "[format('azacr{0}', variables('resourceToken'))]",
-      "location": "[parameters('location')]",
-      "sku": {
-        "name": "Basic"
-      },
-      "properties": {
-        "adminUserEnabled": false,
-        "publicNetworkAccess": "Enabled"
-      },
-      "tags": "[variables('tags')]"
-    },
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', format('azacr{0}', variables('resourceToken')))]",
-      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', format('azacr{0}', variables('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), 'AcrPull')]",
-      "properties": {
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), '2023-01-31').principalId]",
-        "principalType": "ServicePrincipal"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.ContainerRegistry/registries', format('azacr{0}', variables('resourceToken')))]",
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken')))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Sql/servers",
-      "apiVersion": "2021-11-01",
-      "name": "[variables('sqlServerName')]",
-      "location": "eastus2",
-      "properties": {
-        "administratorLogin": "[parameters('sqlAdminUsername')]",
-        "administratorLoginPassword": "[parameters('sqlAdminPassword')]",
-        "version": "12.0",
-        "publicNetworkAccess": "Enabled",
-        "restrictOutboundNetworkAccess": "Disabled"
-      },
-      "tags": "[variables('tags')]"
-    },
-    {
-      "type": "Microsoft.Sql/servers/azureADOnlyAuthentications",
-      "apiVersion": "2021-11-01",
-      "name": "[format('{0}/{1}', variables('sqlServerName'), 'Default')]",
-      "properties": {
-        "azureADOnlyAuthentication": true
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Sql/servers/administrators",
-      "apiVersion": "2021-11-01",
-      "name": "[format('{0}/{1}', variables('sqlServerName'), 'ActiveDirectory')]",
-      "properties": {
-        "administratorType": "ActiveDirectory",
-        "login": "PhotoAlbum-admin",
-        "sid": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), '2023-01-31').principalId]",
-        "tenantId": "[tenant().tenantId]"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]",
-        "[resourceId('Microsoft.Sql/servers/azureADOnlyAuthentications', variables('sqlServerName'), 'Default')]",
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken')))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Sql/servers/databases",
-      "apiVersion": "2021-11-01",
-      "name": "[format('{0}/{1}', variables('sqlServerName'), 'PhotoAlbumDb')]",
-      "location": "eastus2",
-      "sku": {
-        "name": "Basic",
-        "tier": "Basic"
-      },
-      "properties": {
-        "collation": "SQL_Latin1_General_CP1_CI_AS",
-        "maxSizeBytes": 2147483648
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Sql/servers/firewallRules",
-      "apiVersion": "2021-11-01",
-      "name": "[format('{0}/{1}', variables('sqlServerName'), 'AllowAzureServices')]",
-      "properties": {
-        "startIpAddress": "0.0.0.0",
-        "endIpAddress": "0.0.0.0"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Sql/servers/firewallRules",
-      "apiVersion": "2021-11-01",
-      "name": "[format('{0}/{1}', variables('sqlServerName'), 'AllowPublicAccess')]",
-      "properties": {
-        "startIpAddress": "0.0.0.0",
-        "endIpAddress": "255.255.255.255"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[resourceId('Microsoft.Sql/servers/databases', variables('sqlServerName'), 'PhotoAlbumDb')]",
-      "name": "[guid(resourceId('Microsoft.Sql/servers/databases', variables('sqlServerName'), 'PhotoAlbumDb'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), 'SQLDbContributor')]",
-      "properties": {
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '9b7fa17d-e63a-4465-a4fd-dd924db0604b')]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), '2023-01-31').principalId]",
-        "principalType": "ServicePrincipal"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Sql/servers/databases', variables('sqlServerName'), 'PhotoAlbumDb')]",
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken')))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Storage/storageAccounts",
-      "apiVersion": "2023-01-01",
-      "name": "[format('azsto{0}', replace(variables('resourceToken'), '-', ''))]",
-      "location": "[parameters('location')]",
-      "sku": {
-        "name": "Standard_LRS"
-      },
-      "kind": "StorageV2",
-      "properties": {
-        "accessTier": "Hot",
-        "allowBlobPublicAccess": false,
-        "defaultToOAuthAuthentication": true,
-        "minimumTlsVersion": "TLS1_2",
-        "supportsHttpsTrafficOnly": true
-      },
-      "tags": "[variables('tags')]"
-    },
-    {
-      "type": "Microsoft.Storage/storageAccounts/blobServices",
-      "apiVersion": "2023-01-01",
-      "name": "[format('{0}/{1}', format('azsto{0}', replace(variables('resourceToken'), '-', '')), 'default')]",
-      "properties": {
-        "cors": {
-          "corsRules": [
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "6457614606617886629"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            }
+          },
+          "resources": [
             {
-              "allowedHeaders": [
-                "*"
-              ],
-              "allowedMethods": [
-                "GET",
-                "HEAD",
-                "PUT",
-                "POST",
-                "DELETE",
-                "OPTIONS"
-              ],
-              "allowedOrigins": [
-                "*"
-              ],
-              "exposedHeaders": [
-                "*"
-              ],
-              "maxAgeInSeconds": 3600
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('name'))]"
+            },
+            "clientId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('name')), '2023-01-31').clientId]"
+            },
+            "principalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('name')), '2023-01-31').principalId]"
+            }
+          }
+        }
+      }
+    },
+    "logs": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "log-analytics",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[format('azlog{0}', variables('token'))]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "2740573629246782039"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            }
+          },
+          "resources": {
+            "workspace": {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2022-10-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": 30
+              }
+            }
+          },
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('name'))]"
+            },
+            "customerId": {
+              "type": "string",
+              "value": "[reference('workspace').customerId]"
+            },
+            "primarySharedKey": {
+              "type": "securestring",
+              "value": "[listKeys('workspace', '2022-10-01').primarySharedKey]"
+            }
+          }
+        }
+      }
+    },
+    "containerEnvironment": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "container-apps-environment",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[format('azaca{0}', variables('token'))]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "workspaceCustomerId": {
+            "value": "[reference('logs').outputs.customerId.value]"
+          },
+          "workspaceSharedKey": {
+            "value": "[listOutputsWithSecureValues('logs', '2025-04-01').primarySharedKey]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "11999202399400192215"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "workspaceCustomerId": {
+              "type": "string"
+            },
+            "workspaceSharedKey": {
+              "type": "securestring"
+            },
+            "tags": {
+              "type": "object"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "appLogsConfiguration": {
+                  "destination": "log-analytics",
+                  "logAnalyticsConfiguration": {
+                    "customerId": "[parameters('workspaceCustomerId')]",
+                    "sharedKey": "[parameters('workspaceSharedKey')]"
+                  }
+                },
+                "workloadProfiles": [
+                  {
+                    "name": "Consumption",
+                    "workloadProfileType": "Consumption"
+                  }
+                ]
+              }
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/managedEnvironments', parameters('name'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "logs"
+      ]
+    },
+    "registry": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "container-registry",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[format('azacr{0}', variables('token'))]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "7042822790665049058"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ContainerRegistry/registries",
+              "apiVersion": "2023-07-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Basic"
+              },
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "adminUserEnabled": false,
+                "publicNetworkAccess": "Enabled"
+              }
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('name'))]"
+            },
+            "loginServer": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('name')), '2023-07-01').loginServer]"
+            }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "storage",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[format('azsto{0}', replace(variables('token'), '-', ''))]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "5485665723631172628"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-01-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "kind": "StorageV2",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "accessTier": "Hot",
+                "allowBlobPublicAccess": false,
+                "defaultToOAuthAuthentication": true,
+                "minimumTlsVersion": "TLS1_2",
+                "supportsHttpsTrafficOnly": true
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}', parameters('name'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('name'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('name'), 'default', 'photos')]",
+              "properties": {
+                "publicAccess": "None"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('name'), 'default')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('name'))]"
+            },
+            "blobEndpoint": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', parameters('name')), '2023-01-01').primaryEndpoints.blob]"
+            },
+            "containerName": {
+              "type": "string",
+              "value": "photos"
+            }
+          }
+        }
+      }
+    },
+    "sql": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "sql",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[format('azsql{0}', variables('token'))]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "administratorLogin": {
+            "value": "[parameters('sqlAdminUsername')]"
+          },
+          "administratorLoginPassword": {
+            "value": "[parameters('sqlAdminPassword')]"
+          },
+          "identityPrincipalId": {
+            "value": "[reference('identity').outputs.principalId.value]"
+          },
+          "tenantId": {
+            "value": "[tenant().tenantId]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "11028945538709193944"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "administratorLogin": {
+              "type": "string"
+            },
+            "administratorLoginPassword": {
+              "type": "securestring"
+            },
+            "identityPrincipalId": {
+              "type": "string"
+            },
+            "tenantId": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Sql/servers",
+              "apiVersion": "2021-11-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "administratorLogin": "[parameters('administratorLogin')]",
+                "administratorLoginPassword": "[parameters('administratorLoginPassword')]",
+                "version": "12.0",
+                "publicNetworkAccess": "Enabled"
+              }
+            },
+            {
+              "type": "Microsoft.Sql/servers/azureADOnlyAuthentications",
+              "apiVersion": "2021-11-01",
+              "name": "[format('{0}/{1}', parameters('name'), 'Default')]",
+              "properties": {
+                "azureADOnlyAuthentication": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Sql/servers', parameters('name'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Sql/servers/administrators",
+              "apiVersion": "2021-11-01",
+              "name": "[format('{0}/{1}', parameters('name'), 'ActiveDirectory')]",
+              "properties": {
+                "administratorType": "ActiveDirectory",
+                "login": "PhotoAlbum managed identity",
+                "sid": "[parameters('identityPrincipalId')]",
+                "tenantId": "[parameters('tenantId')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Sql/servers/azureADOnlyAuthentications', parameters('name'), 'Default')]",
+                "[resourceId('Microsoft.Sql/servers', parameters('name'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Sql/servers/databases",
+              "apiVersion": "2021-11-01",
+              "name": "[format('{0}/{1}', parameters('name'), 'PhotoAlbumDb')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Basic",
+                "tier": "Basic"
+              },
+              "properties": {
+                "collation": "SQL_Latin1_General_CP1_CI_AS",
+                "maxSizeBytes": 2147483648
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Sql/servers', parameters('name'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Sql/servers/firewallRules",
+              "apiVersion": "2021-11-01",
+              "name": "[format('{0}/{1}', parameters('name'), 'AllowAzureServices')]",
+              "properties": {
+                "startIpAddress": "0.0.0.0",
+                "endIpAddress": "0.0.0.0"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Sql/servers', parameters('name'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "serverName": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "serverFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Sql/servers', parameters('name')), '2021-11-01').fullyQualifiedDomainName]"
+            },
+            "databaseName": {
+              "type": "string",
+              "value": "PhotoAlbumDb"
+            },
+            "databaseResourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Sql/servers/databases', parameters('name'), 'PhotoAlbumDb')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "identity"
+      ]
+    },
+    "roleAssignments": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "role-assignments",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "identityPrincipalId": {
+            "value": "[reference('identity').outputs.principalId.value]"
+          },
+          "identityResourceId": {
+            "value": "[reference('identity').outputs.resourceId.value]"
+          },
+          "registryResourceId": {
+            "value": "[reference('registry').outputs.resourceId.value]"
+          },
+          "registryName": {
+            "value": "[reference('registry').outputs.name.value]"
+          },
+          "storageResourceId": {
+            "value": "[reference('storage').outputs.resourceId.value]"
+          },
+          "storageName": {
+            "value": "[reference('storage').outputs.name.value]"
+          },
+          "sqlDatabaseResourceId": {
+            "value": "[reference('sql').outputs.databaseResourceId.value]"
+          },
+          "sqlServerName": {
+            "value": "[reference('sql').outputs.serverName.value]"
+          },
+          "sqlDatabaseName": {
+            "value": "[reference('sql').outputs.databaseName.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "189544385381159747"
+            }
+          },
+          "parameters": {
+            "identityPrincipalId": {
+              "type": "string"
+            },
+            "identityResourceId": {
+              "type": "string"
+            },
+            "registryResourceId": {
+              "type": "string"
+            },
+            "registryName": {
+              "type": "string"
+            },
+            "storageResourceId": {
+              "type": "string"
+            },
+            "storageName": {
+              "type": "string"
+            },
+            "sqlDatabaseResourceId": {
+              "type": "string"
+            },
+            "sqlServerName": {
+              "type": "string"
+            },
+            "sqlDatabaseName": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
+              "name": "[guid(parameters('registryResourceId'), parameters('identityResourceId'), 'AcrPull')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+                "principalId": "[parameters('identityPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageName'))]",
+              "name": "[guid(parameters('storageResourceId'), parameters('identityResourceId'), 'StorageBlobDataContributor')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
+                "principalId": "[parameters('identityPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Sql/servers/databases', split(format('{0}/{1}', parameters('sqlServerName'), parameters('sqlDatabaseName')), '/')[0], split(format('{0}/{1}', parameters('sqlServerName'), parameters('sqlDatabaseName')), '/')[1])]",
+              "name": "[guid(parameters('sqlDatabaseResourceId'), parameters('identityResourceId'), 'SqlDbContributor')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '9b7fa17d-e63a-4465-a4fd-dd924db0604b')]",
+                "principalId": "[parameters('identityPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
             }
           ]
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Storage/storageAccounts', format('azsto{0}', replace(variables('resourceToken'), '-', '')))]"
+        "identity",
+        "registry",
+        "sql",
+        "storage"
       ]
     },
-    {
-      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
-      "apiVersion": "2023-01-01",
-      "name": "[format('{0}/{1}/{2}', format('azsto{0}', replace(variables('resourceToken'), '-', '')), 'default', 'photos')]",
+    "app": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "container-app",
       "properties": {
-        "publicAccess": "None"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', format('azsto{0}', replace(variables('resourceToken'), '-', '')), 'default')]"
-      ]
-    },
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[resourceId('Microsoft.Storage/storageAccounts', format('azsto{0}', replace(variables('resourceToken'), '-', '')))]",
-      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', format('azsto{0}', replace(variables('resourceToken'), '-', ''))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), 'StorageBlobDataContributor')]",
-      "properties": {
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), '2023-01-31').principalId]",
-        "principalType": "ServicePrincipal"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Storage/storageAccounts', format('azsto{0}', replace(variables('resourceToken'), '-', '')))]",
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken')))]"
-      ]
-    },
-    {
-      "type": "Microsoft.App/containerApps",
-      "apiVersion": "2023-05-01",
-      "name": "[format('azaca{0}', variables('resourceToken'))]",
-      "location": "[parameters('location')]",
-      "identity": {
-        "type": "UserAssigned",
-        "userAssignedIdentities": {
-          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))))]": {}
-        }
-      },
-      "properties": {
-        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', format('azaca{0}', variables('resourceToken')))]",
-        "configuration": {
-          "activeRevisionsMode": "Single",
-          "ingress": {
-            "external": true,
-            "targetPort": 8080,
-            "corsPolicy": {
-              "allowedOrigins": [
-                "*"
-              ],
-              "allowedMethods": [
-                "*"
-              ],
-              "allowedHeaders": [
-                "*"
-              ]
-            }
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[format('azapp{0}', variables('token'))]"
           },
-          "registries": "[if(contains(parameters('webImageName'), reference(resourceId('Microsoft.ContainerRegistry/registries', format('azacr{0}', variables('resourceToken'))), '2023-07-01').loginServer), createArray(createObject('server', reference(resourceId('Microsoft.ContainerRegistry/registries', format('azacr{0}', variables('resourceToken'))), '2023-07-01').loginServer, 'identity', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))))), createArray())]",
-          "secrets": []
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "environmentResourceId": {
+            "value": "[reference('containerEnvironment').outputs.resourceId.value]"
+          },
+          "image": {
+            "value": "[parameters('webImageName')]"
+          },
+          "registryLoginServer": {
+            "value": "[reference('registry').outputs.loginServer.value]"
+          },
+          "identityResourceId": {
+            "value": "[reference('identity').outputs.resourceId.value]"
+          },
+          "sqlServerFqdn": {
+            "value": "[reference('sql').outputs.serverFqdn.value]"
+          },
+          "databaseName": {
+            "value": "[reference('sql').outputs.databaseName.value]"
+          },
+          "storageBlobEndpoint": {
+            "value": "[reference('storage').outputs.blobEndpoint.value]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
         },
         "template": {
-          "containers": [
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "16288358082596832574"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "environmentResourceId": {
+              "type": "string"
+            },
+            "image": {
+              "type": "string"
+            },
+            "registryLoginServer": {
+              "type": "string"
+            },
+            "identityResourceId": {
+              "type": "string"
+            },
+            "sqlServerFqdn": {
+              "type": "string"
+            },
+            "databaseName": {
+              "type": "string"
+            },
+            "storageBlobEndpoint": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            }
+          },
+          "resources": [
             {
-              "name": "photoalbum",
-              "image": "[parameters('webImageName')]",
-              "resources": {
-                "cpu": "[json('0.5')]",
-                "memory": "1Gi"
-              },
-              "env": [
-                {
-                  "name": "ConnectionStrings__DefaultConnection",
-                  "value": "[variables('sqlConnectionString')]"
-                },
-                {
-                  "name": "AzureStorageBlob__Endpoint",
-                  "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', format('azsto{0}', replace(variables('resourceToken'), '-', ''))), '2023-01-01').primaryEndpoints.blob]"
-                },
-                {
-                  "name": "AzureStorageBlob__ContainerName",
-                  "value": "photos"
-                },
-                {
-                  "name": "ASPNETCORE_ENVIRONMENT",
-                  "value": "Production"
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('identityResourceId'))]": {}
                 }
-              ]
+              },
+              "properties": {
+                "managedEnvironmentId": "[parameters('environmentResourceId')]",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": true,
+                    "targetPort": 8080,
+                    "transport": "auto"
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('registryLoginServer')]",
+                      "identity": "[parameters('identityResourceId')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "photoalbum",
+                      "image": "[parameters('image')]",
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "ConnectionStrings__DefaultConnection",
+                          "value": "[format('Server=tcp:{0},1433;Initial Catalog={1};Authentication=Active Directory Default;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;', parameters('sqlServerFqdn'), parameters('databaseName'))]"
+                        },
+                        {
+                          "name": "AzureStorageBlob__Endpoint",
+                          "value": "[parameters('storageBlobEndpoint')]"
+                        },
+                        {
+                          "name": "AzureStorageBlob__ContainerName",
+                          "value": "photos"
+                        },
+                        {
+                          "name": "ASPNETCORE_ENVIRONMENT",
+                          "value": "Production"
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 0,
+                    "maxReplicas": 3
+                  }
+                }
+              }
             }
           ],
-          "scale": {
-            "minReplicas": 1,
-            "maxReplicas": 3
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "fqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/containerApps', parameters('name')), '2023-05-01').configuration.ingress.fqdn]"
+            }
           }
         }
       },
-      "tags": "[variables('tags')]",
       "dependsOn": [
-        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', format('azacr{0}', variables('resourceToken'))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', format('azacr{0}', variables('resourceToken'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), 'AcrPull'))]",
-        "[resourceId('Microsoft.App/managedEnvironments', format('azaca{0}', variables('resourceToken')))]",
-        "[resourceId('Microsoft.ContainerRegistry/registries', format('azacr{0}', variables('resourceToken')))]",
-        "[extensionResourceId(resourceId('Microsoft.Sql/servers/databases', variables('sqlServerName'), 'PhotoAlbumDb'), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Sql/servers/databases', variables('sqlServerName'), 'PhotoAlbumDb'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), 'SQLDbContributor'))]",
-        "[resourceId('Microsoft.Sql/servers/azureADOnlyAuthentications', variables('sqlServerName'), 'Default')]",
-        "[resourceId('Microsoft.Storage/storageAccounts', format('azsto{0}', replace(variables('resourceToken'), '-', '')))]",
-        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', format('azsto{0}', replace(variables('resourceToken'), '-', ''))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', format('azsto{0}', replace(variables('resourceToken'), '-', ''))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), 'StorageBlobDataContributor'))]",
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken')))]"
+        "containerEnvironment",
+        "identity",
+        "registry",
+        "roleAssignments",
+        "sql",
+        "storage"
       ]
     }
-  ],
+  },
   "outputs": {
     "AZURE_LOCATION": {
       "type": "string",
@@ -402,53 +923,69 @@
       "type": "string",
       "value": "[resourceGroup().name]"
     },
-    "AZURE_CONTAINER_REGISTRY_ENDPOINT": {
-      "type": "string",
-      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', format('azacr{0}', variables('resourceToken'))), '2023-07-01').loginServer]"
-    },
     "AZURE_CONTAINER_REGISTRY_NAME": {
       "type": "string",
-      "value": "[format('azacr{0}', variables('resourceToken'))]"
+      "value": "[reference('registry').outputs.name.value]"
+    },
+    "AZURE_CONTAINER_REGISTRY_ENDPOINT": {
+      "type": "string",
+      "value": "[reference('registry').outputs.loginServer.value]"
     },
     "AZURE_CONTAINERAPP_NAME": {
       "type": "string",
-      "value": "[format('azaca{0}', variables('resourceToken'))]"
+      "value": "[reference('app').outputs.name.value]"
     },
     "AZURE_CONTAINERAPP_FQDN": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.App/containerApps', format('azaca{0}', variables('resourceToken'))), '2023-05-01').configuration.ingress.fqdn]"
+      "value": "[reference('app').outputs.fqdn.value]"
     },
     "AZURE_CONTAINERAPP_URL": {
       "type": "string",
-      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', format('azaca{0}', variables('resourceToken'))), '2023-05-01').configuration.ingress.fqdn)]"
+      "value": "[format('https://{0}', reference('app').outputs.fqdn.value)]"
     },
     "AZURE_SQL_SERVER_NAME": {
       "type": "string",
-      "value": "[variables('sqlServerName')]"
+      "value": "[reference('sql').outputs.serverName.value]"
     },
     "AZURE_SQL_SERVER_FQDN": {
       "type": "string",
-      "value": "[variables('sqlServerFqdn')]"
+      "value": "[reference('sql').outputs.serverFqdn.value]"
     },
     "AZURE_SQL_DATABASE_NAME": {
       "type": "string",
-      "value": "PhotoAlbumDb"
+      "value": "[reference('sql').outputs.databaseName.value]"
     },
     "AZURE_STORAGE_ACCOUNT_NAME": {
       "type": "string",
-      "value": "[format('azsto{0}', replace(variables('resourceToken'), '-', ''))]"
+      "value": "[reference('storage').outputs.name.value]"
     },
     "AZURE_STORAGE_BLOB_ENDPOINT": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', format('azsto{0}', replace(variables('resourceToken'), '-', ''))), '2023-01-01').primaryEndpoints.blob]"
+      "value": "[reference('storage').outputs.blobEndpoint.value]"
     },
-    "USER_ASSIGNED_IDENTITY_ID": {
+    "AZURE_STORAGE_CONTAINER_NAME": {
       "type": "string",
-      "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken')))]"
+      "value": "[reference('storage').outputs.containerName.value]"
+    },
+    "USER_ASSIGNED_IDENTITY_NAME": {
+      "type": "string",
+      "value": "[reference('identity').outputs.name.value]"
+    },
+    "USER_ASSIGNED_IDENTITY_CLIENT_ID": {
+      "type": "string",
+      "value": "[reference('identity').outputs.clientId.value]"
     },
     "USER_ASSIGNED_IDENTITY_PRINCIPAL_ID": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('azuai{0}', variables('resourceToken'))), '2023-01-31').principalId]"
+      "value": "[reference('identity').outputs.principalId.value]"
+    },
+    "LOG_ANALYTICS_WORKSPACE_NAME": {
+      "type": "string",
+      "value": "[reference('logs').outputs.name.value]"
+    },
+    "LOG_ANALYTICS_WORKSPACE_ID": {
+      "type": "string",
+      "value": "[reference('logs').outputs.customerId.value]"
     }
   }
 }

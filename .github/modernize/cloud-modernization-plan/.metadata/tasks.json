@@ -21,7 +21,7 @@
     {
       "type": "infrastructure",
       "id": "002-infrastructure",
-      "status": "success",
+      "status": "started",
       "description": "Provision the Azure infrastructure required to run PhotoAlbum in the cloud: Container Apps environment, Container Registry, Azure SQL Database, and Storage Account.",
       "reason": "The application needs managed Azure services (compute, database, storage) provisioned before it can be migrated and deployed; existing Bicep templates in infra/ already define most of these resources and should be extended to use Managed Identity instead of SQL login/password.",
       "requirements": "Reuse and extend the existing Bicep templates under infra/ to provision an Azure Container Apps environment, Azure Container Registry, Azure SQL Database, and Azure Storage Account (Blob) needed by the application. Configure the Container App with a system- or user-assigned Managed Identity and grant it least-privilege access to the SQL Database and Storage Account so the application can authenticate without embedded credentials.",
