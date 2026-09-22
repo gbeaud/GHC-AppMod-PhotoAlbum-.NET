@@ -4,7 +4,8 @@ using Azure.Storage.Blobs;
 namespace PhotoAlbum.Services;
 
 /// <summary>
-/// Service for Azure Blob Storage operations using Managed Identity authentication
+/// Service for Azure Blob Storage operations using Managed Identity authentication in production,
+/// or connection string (Shared Key) for testcontainer/local development.
 /// </summary>
 public class AzureBlobStorageService : IBlobStorageService
 {
@@ -23,10 +24,25 @@ public class AzureBlobStorageService : IBlobStorageService
         var containerName = configuration["BlobStorage:ContainerName"] 
             ?? throw new InvalidOperationException("BlobStorage:ContainerName not configured");
 
-        // Initialize BlobServiceClient using DefaultAzureCredential (Managed Identity)
-        var blobServiceClient = new BlobServiceClient(
-            new Uri(blobStorageUri),
-            new DefaultAzureCredential());
+        // Check if a connection string is provided (for testcontainer/local development)
+        var blobStorageConnectionString = configuration["BlobStorage:ConnectionString"];
+        
+        BlobServiceClient blobServiceClient;
+
+        if (!string.IsNullOrEmpty(blobStorageConnectionString))
+        {
+            // Testcontainer mode: use connection string with Shared Key authentication
+            _logger.LogInformation("Using connection string authentication for Blob Storage (testcontainer mode)");
+            blobServiceClient = new BlobServiceClient(blobStorageConnectionString);
+        }
+        else
+        {
+            // Production mode: use Managed Identity (DefaultAzureCredential)
+            _logger.LogInformation("Using Managed Identity (DefaultAzureCredential) for Blob Storage");
+            blobServiceClient = new BlobServiceClient(
+                new Uri(blobStorageUri),
+                new DefaultAzureCredential());
+        }
 
         _containerClient = blobServiceClient.GetBlobContainerClient(containerName);
     }
