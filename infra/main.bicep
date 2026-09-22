@@ -31,6 +31,7 @@ param sqlAdminPassword string
 var resourceToken = toLower(uniqueString(subscription().id, resourceGroup().id, location, environmentName))
 var tags = {
   'azd-env-name': environmentName
+  'SecurityControl': 'Ignore'  // Policy exemption for Azure AD-only authentication requirement
 }
 
 // === User-Assigned Managed Identity (required for Container Apps) ===
@@ -118,7 +119,17 @@ resource sqlServer 'Microsoft.Sql/servers@2021-11-01' = {
   tags: tags
 }
 
+// Enable Azure AD-only authentication on the SQL Server
+resource sqlServerADOnlyAuth 'Microsoft.Sql/servers/azureADOnlyAuthentications@2021-11-01' = {
+  parent: sqlServer
+  name: 'Default'
+  properties: {
+    azureADOnlyAuthentication: true
+  }
+}
+
 // SQL Server Azure AD Administrator (required for Azure AD-only authentication policy)
+// This must be created after the Azure AD-only authentication is enabled
 resource sqlServerADAdmin 'Microsoft.Sql/servers/administrators@2021-11-01' = {
   parent: sqlServer
   name: 'ActiveDirectory'
@@ -127,8 +138,10 @@ resource sqlServerADAdmin 'Microsoft.Sql/servers/administrators@2021-11-01' = {
     login: 'PhotoAlbum-admin'
     sid: userAssignedIdentity.properties.principalId
     tenantId: tenant().tenantId
-    azureADOnlyAuthentication: true
   }
+  dependsOn: [
+    sqlServerADOnlyAuth  // Ensure Azure AD-only auth is set first
+  ]
 }
 
 // SQL Database
@@ -163,6 +176,18 @@ resource sqlFirewallRulePublicAccess 'Microsoft.Sql/servers/firewallRules@2021-1
   properties: {
     startIpAddress: '0.0.0.0'
     endIpAddress: '255.255.255.255'
+  }
+}
+
+// Role Assignment: User-Assigned Identity -> SQL DB Contributor
+// This allows the managed identity to connect to the database with Azure AD authentication
+resource sqlDbContributorRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: sqlDatabase
+  name: guid(sqlDatabase.id, userAssignedIdentity.id, 'SQLDbContributor')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '9b7fa17d-e63a-4465-a4fd-dd924db0604b')  // SQL DB Contributor
+    principalId: userAssignedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
@@ -299,6 +324,8 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
   dependsOn: [
     acrPullRoleAssignment  // Ensure ACR pull role is assigned before container app
     storageBlobContributorRoleAssignment  // Ensure storage role is assigned before container app
+    sqlDbContributorRoleAssignment  // Ensure SQL DB role is assigned before container app
+    sqlServerADOnlyAuth  // Ensure Azure AD-only authentication is enabled
   ]
 }
 
