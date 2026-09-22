@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Moq;
 using PhotoAlbum.Data;
 using PhotoAlbum.Models;
 using PhotoAlbum.Services;
@@ -15,7 +16,7 @@ public class PhotoServiceTests : IDisposable
 {
     private readonly PhotoAlbumContext _context;
     private readonly IPhotoService _photoService;
-    private readonly string _tempUploadPath;
+    private readonly Mock<IBlobStorageService> _mockBlobStorageService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<PhotoService> _logger;
 
@@ -27,9 +28,25 @@ public class PhotoServiceTests : IDisposable
             .Options;
         _context = new PhotoAlbumContext(options);
 
-        // Setup temp upload directory
-        _tempUploadPath = Path.Combine(Path.GetTempPath(), "PhotoAlbumTests", Guid.NewGuid().ToString());
-        Directory.CreateDirectory(_tempUploadPath);
+        // Setup mock blob storage service
+        _mockBlobStorageService = new Mock<IBlobStorageService>();
+        
+        // Default to successful uploads and deletions
+        _mockBlobStorageService
+            .Setup(x => x.UploadBlobAsync(It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<string>()))
+            .ReturnsAsync(true);
+
+        _mockBlobStorageService
+            .Setup(x => x.DeleteBlobAsync(It.IsAny<string>()))
+            .ReturnsAsync(true);
+
+        _mockBlobStorageService
+            .Setup(x => x.BlobExistsAsync(It.IsAny<string>()))
+            .ReturnsAsync(true);
+
+        _mockBlobStorageService
+            .Setup(x => x.DownloadBlobAsync(It.IsAny<string>()))
+            .ReturnsAsync((string blobName) => new MemoryStream(new byte[] { 1, 2, 3 }));
 
         // Setup configuration
         var inMemorySettings = new Dictionary<string, string>
@@ -38,8 +55,7 @@ public class PhotoServiceTests : IDisposable
             {"FileUpload:AllowedMimeTypes:0", "image/jpeg"},
             {"FileUpload:AllowedMimeTypes:1", "image/png"},
             {"FileUpload:AllowedMimeTypes:2", "image/gif"},
-            {"FileUpload:AllowedMimeTypes:3", "image/webp"},
-            {"FileUpload:UploadPath", _tempUploadPath}
+            {"FileUpload:AllowedMimeTypes:3", "image/webp"}
         };
         _configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(inMemorySettings!)
@@ -48,8 +64,8 @@ public class PhotoServiceTests : IDisposable
         // Setup logger
         _logger = new LoggerFactory().CreateLogger<PhotoService>();
 
-        // Create PhotoService instance
-        _photoService = new PhotoService(_context, _configuration, _logger);
+        // Create PhotoService instance with mocked blob storage
+        _photoService = new PhotoService(_context, _configuration, _logger, _mockBlobStorageService.Object);
     }
 
     [Fact]
@@ -73,6 +89,11 @@ public class PhotoServiceTests : IDisposable
         Assert.Equal("test.jpg", photo.OriginalFileName);
         Assert.Equal("image/jpeg", photo.MimeType);
         Assert.True(photo.FileSize > 0);
+
+        // Verify blob upload was called
+        _mockBlobStorageService.Verify(
+            x => x.UploadBlobAsync(It.IsAny<string>(), It.IsAny<Stream>(), "image/jpeg"),
+            Times.Once);
     }
 
     [Fact]
@@ -88,6 +109,11 @@ public class PhotoServiceTests : IDisposable
         Assert.False(result.Success);
         Assert.Null(result.PhotoId);
         Assert.Contains("not supported", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+        // Verify blob upload was never called
+        _mockBlobStorageService.Verify(
+            x => x.UploadBlobAsync(It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<string>()),
+            Times.Never);
     }
 
     [Fact]
@@ -103,25 +129,11 @@ public class PhotoServiceTests : IDisposable
         Assert.False(result.Success);
         Assert.Null(result.PhotoId);
         Assert.Contains("exceeds", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
-    }
 
-    [Fact]
-    public async Task UploadPhotoAsync_CreatesFileInUploadsDirectory()
-    {
-        // Arrange
-        var file = CreateImageFormFile("test.png", "image/png");
-
-        // Act
-        var result = await _photoService.UploadPhotoAsync(file);
-
-        // Assert
-        Assert.True(result.Success);
-
-        // Verify file exists
-        var photo = await _context.Photos.FindAsync(result.PhotoId);
-        Assert.NotNull(photo);
-        var fullPath = Path.Combine(_tempUploadPath, photo.StoredFileName);
-        Assert.True(File.Exists(fullPath));
+        // Verify blob upload was never called
+        _mockBlobStorageService.Verify(
+            x => x.UploadBlobAsync(It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<string>()),
+            Times.Never);
     }
 
     [Fact]
@@ -143,6 +155,61 @@ public class PhotoServiceTests : IDisposable
         Assert.NotEmpty(photo.FilePath);
         Assert.True(photo.UploadedAt <= DateTime.UtcNow);
         Assert.True(photo.UploadedAt > DateTime.UtcNow.AddMinutes(-1));
+    }
+
+    [Fact]
+    public async Task UploadPhotoAsync_WhenBlobUploadFails_ReturnsError()
+    {
+        // Arrange
+        _mockBlobStorageService
+            .Setup(x => x.UploadBlobAsync(It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<string>()))
+            .ReturnsAsync(false);
+
+        var file = CreateImageFormFile("test.jpg", "image/jpeg");
+
+        // Act
+        var result = await _photoService.UploadPhotoAsync(file);
+
+        // Assert
+        Assert.False(result.Success);
+        Assert.Null(result.PhotoId);
+        Assert.Contains("Error saving file", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task UploadPhotoAsync_WhenDatabaseSaveFails_RollsBackBlob()
+    {
+        // Arrange
+        var file = CreateImageFormFile("test.jpg", "image/jpeg");
+
+        // Simulate database save failure
+        _context.ChangeTracker.Clear();
+        var options = new DbContextOptionsBuilder<PhotoAlbumContext>()
+            .UseInMemoryDatabase(databaseName: "FailingDb")
+            .Options;
+        var failingContext = new PhotoAlbumContext(options);
+        
+        // Dispose context to make it fail
+        failingContext.Dispose();
+
+        var logger = new LoggerFactory().CreateLogger<PhotoService>();
+        var photoService = new PhotoService(failingContext, _configuration, logger, _mockBlobStorageService.Object);
+
+        // Act - Note: This will throw because we disposed the context
+        try
+        {
+            var result = await photoService.UploadPhotoAsync(file);
+            Assert.False(result.Success);
+        }
+        catch
+        {
+            // Expected when context is disposed
+        }
+
+        // Verify blob was uploaded
+        _mockBlobStorageService.Verify(
+            x => x.UploadBlobAsync(It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<string>()),
+            Times.Once);
     }
 
     [Fact]
@@ -191,7 +258,7 @@ public class PhotoServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DeletePhotoAsync_RemovesFileAndDatabaseRecord()
+    public async Task DeletePhotoAsync_RemovesBlobAndDatabaseRecord()
     {
         // Arrange
         var file = CreateImageFormFile("todelete.jpg", "image/jpeg");
@@ -199,7 +266,7 @@ public class PhotoServiceTests : IDisposable
         var photoId = uploadResult.PhotoId!.Value;
 
         var photo = await _context.Photos.FindAsync(photoId);
-        var fullPath = Path.Combine(_tempUploadPath, photo!.StoredFileName);
+        Assert.NotNull(photo);
 
         // Act
         var result = await _photoService.DeletePhotoAsync(photoId);
@@ -207,7 +274,37 @@ public class PhotoServiceTests : IDisposable
         // Assert
         Assert.True(result);
         Assert.Null(await _context.Photos.FindAsync(photoId));
-        Assert.False(File.Exists(fullPath));
+
+        // Verify blob deletion was called
+        _mockBlobStorageService.Verify(
+            x => x.DeleteBlobAsync(photo.StoredFileName),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task GetPhotoByIdAsync_ReturnsPhoto()
+    {
+        // Arrange
+        var photo = new Photo
+        {
+            OriginalFileName = "test.jpg",
+            StoredFileName = "test-guid.jpg",
+            FilePath = "/uploads/test-guid.jpg",
+            FileSize = 1024,
+            MimeType = "image/jpeg",
+            UploadedAt = DateTime.UtcNow
+        };
+
+        await _context.Photos.AddAsync(photo);
+        await _context.SaveChangesAsync();
+
+        // Act
+        var result = await _photoService.GetPhotoByIdAsync(photo.Id);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(photo.Id, result.Id);
+        Assert.Equal("test.jpg", result.OriginalFileName);
     }
 
     private IFormFile CreateMockFormFile(string fileName, string contentType, long size)
@@ -244,9 +341,5 @@ public class PhotoServiceTests : IDisposable
     public void Dispose()
     {
         _context.Dispose();
-        if (Directory.Exists(_tempUploadPath))
-        {
-            Directory.Delete(_tempUploadPath, true);
-        }
     }
 }

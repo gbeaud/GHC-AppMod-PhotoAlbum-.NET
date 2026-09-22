@@ -5,32 +5,32 @@ using PhotoAlbum.Services;
 namespace PhotoAlbum.Pages;
 
 /// <summary>
-/// Page model for serving photo files with indirect access
+/// Page model for serving photo files from Azure Blob Storage with indirect access
 /// </summary>
 public class PhotoFileModel : PageModel
 {
     private readonly IPhotoService _photoService;
+    private readonly IBlobStorageService _blobStorage;
     private readonly ILogger<PhotoFileModel> _logger;
-    private readonly IConfiguration _configuration;
-    private readonly string _uploadPath;
 
     /// <summary>
     /// Initializes a new instance of the PhotoFileModel class
     /// </summary>
     /// <param name="photoService">Service for photo operations</param>
-    /// <param name="configuration">Configuration instance</param>
+    /// <param name="blobStorage">Service for blob storage operations</param>
     /// <param name="logger">Logger instance</param>
-    public PhotoFileModel(IPhotoService photoService, IConfiguration configuration, ILogger<PhotoFileModel> logger)
+    public PhotoFileModel(
+        IPhotoService photoService,
+        IBlobStorageService blobStorage,
+        ILogger<PhotoFileModel> logger)
     {
         _photoService = photoService;
-        _configuration = configuration;
+        _blobStorage = blobStorage;
         _logger = logger;
-
-        _uploadPath = _configuration["FileUpload:UploadPath"] ?? "wwwroot/uploads";
     }
 
     /// <summary>
-    /// Serves a photo file by ID
+    /// Serves a photo file by ID from Azure Blob Storage
     /// </summary>
     /// <param name="id">The ID of the photo to serve</param>
     /// <returns>File result with the photo, or NotFound if photo doesn't exist</returns>
@@ -52,28 +52,22 @@ public class PhotoFileModel : PageModel
                 return NotFound();
             }
 
-            // Construct the physical file path
-            // photo.FilePath is stored as "/uploads/filename.jpg"
-            // We need to read from "wwwroot/uploads/filename.jpg"
-            var fileName = Path.GetFileName(photo.FilePath);
-            var filePath = Path.Combine(Directory.GetCurrentDirectory(), _uploadPath, fileName);
-
-            if (!System.IO.File.Exists(filePath))
+            // Download blob from Azure Storage
+            var blobStream = await _blobStorage.DownloadBlobAsync(photo.StoredFileName);
+            if (blobStream == null)
             {
-                _logger.LogError("Physical file not found for photo ID {PhotoId} at path {FilePath}", id, filePath);
+                _logger.LogError("Blob not found in Azure Storage for photo ID {PhotoId}: {BlobName}", id, photo.StoredFileName);
                 return NotFound();
             }
 
-            var fileBytes = await System.IO.File.ReadAllBytesAsync(filePath);
-
-            _logger.LogDebug("Serving photo ID {PhotoId} ({FileName}, {FileSize} bytes)",
-                id, photo.OriginalFileName, fileBytes.Length);
+            _logger.LogDebug("Serving photo ID {PhotoId} ({FileName}) from Azure Blob Storage",
+                id, photo.OriginalFileName);
 
             // Return the file with appropriate content type and enable caching
             Response.Headers.CacheControl = "public,max-age=31536000"; // Cache for 1 year
             Response.Headers.ETag = $"\"{photo.Id}-{photo.UploadedAt.Ticks}\"";
 
-            return File(fileBytes, photo.MimeType);
+            return File(blobStream, photo.MimeType);
         }
         catch (Exception ex)
         {
