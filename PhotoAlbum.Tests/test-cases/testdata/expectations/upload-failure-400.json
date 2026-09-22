@@ -1,0 +1,10 @@
+{
+  "success": false,
+  "failedUploads": [
+    {
+      "error": "File type not supported. Please upload JPEG, PNG, GIF, or WebP images.",
+      "fileName": "invalid-file.txt"
+    }
+  ],
+  "uploadedPhotos": []
+}

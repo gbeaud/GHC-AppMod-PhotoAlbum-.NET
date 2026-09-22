@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "failedUploads": [],
+  "uploadedPhotos": [
+    {
+      "uploadedAt": "2025-09-30T10:17:15.123456Z",
+      "fileSize": 234,
+      "id": 1,
+      "width": 16,
+      "originalFileName": "sample-16x16.png",
+      "filePath": "/uploads/[guid].png",
+      "height": 16
+    }
+  ]
+}
