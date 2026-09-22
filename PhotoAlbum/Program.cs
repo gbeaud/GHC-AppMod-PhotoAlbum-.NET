@@ -1,3 +1,4 @@
+using Azure.Identity;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
 using PhotoAlbum.Data;
@@ -18,9 +19,16 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     });
 builder.Services.AddAuthorization();
 
-// Add DbContext
+// Add DbContext with Managed Identity authentication for Azure SQL Database
+// The connection string uses "Authentication=Active Directory Default" which enables
+// Managed Identity authentication via DefaultAzureCredential in Azure environments.
 builder.Services.AddDbContext<PhotoAlbumContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+        ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+    
+    options.UseSqlServer(connectionString);
+});
 
 // Register blob storage service with Managed Identity authentication
 builder.Services.AddScoped<IBlobStorageService, AzureBlobStorageService>();
