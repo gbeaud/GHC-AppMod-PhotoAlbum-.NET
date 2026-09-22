@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Tasks template for modernization plan. Generate this file alongside plan.md to track individual migration tasks.",
+  "tasks": [
+    {
+      "type": "setupBaseline",
+      "id": "001-setupBaseline",
+      "description": "Capture a frozen baseline snapshot of the PhotoAlbum application (test cases, test data, and infra-decision-table) before any cloud-readiness changes are made.",
+      "reason": "Provides a stable reference point so integration tests added later can verify behavior is preserved after migrating storage and database access to Azure services.",
+      "requirements": "Snapshot the current PhotoAlbum project source, existing xUnit tests, and current behavior (photo upload, listing, detail view, deletion) to produce a frozen test specification and infra-decision-table (real vs mock strategy per external dependency) for use by the later integration test task.",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": []
+    },
+    {
+      "type": "infrastructure",
+      "id": "002-infrastructure",
+      "description": "Provision the Azure infrastructure required to run PhotoAlbum in the cloud: Container Apps environment, Container Registry, Azure SQL Database, and Storage Account.",
+      "reason": "The application needs managed Azure services (compute, database, storage) provisioned before it can be migrated and deployed; existing Bicep templates in infra/ already define most of these resources and should be extended to use Managed Identity instead of SQL login/password.",
+      "requirements": "Reuse and extend the existing Bicep templates under infra/ to provision an Azure Container Apps environment, Azure Container Registry, Azure SQL Database, and Azure Storage Account (Blob) needed by the application. Configure the Container App with a system- or user-assigned Managed Identity and grant it least-privilege access to the SQL Database and Storage Account so the application can authenticate without embedded credentials.",
+      "iacType": "bicep",
+      "provision": true,
+      "skills": [
+        {
+          "name": "infrastructure-bicep-generation",
+          "location": "builtin"
+        }
+      ],
+      "dependencies": []
+    },
+    {
+      "type": "transform",
+      "id": "003-transform-migrate-local-storage-to-blob",
+      "description": "Migrate uploaded photo storage from the local container filesystem (wwwroot/uploads) to Azure Blob Storage.",
+      "reason": "Local disk storage is ephemeral in a containerized/scaled deployment; photos would be lost on restart or when scaling out to multiple replicas.",
+      "requirements": "Replace local file read/write/delete operations in PhotoService with Azure Blob Storage operations (upload, retrieve, delete) using Managed Identity authentication (DefaultAzureCredential). Preserve existing upload validation (file size, MIME type limits) and existing behavior for listing, viewing, and deleting photos, including transactional rollback of the stored blob if the database save fails.",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "skills": [
+        {
+          "name": "migration-azure-storage-blob",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-managed-identity",
+          "location": "builtin"
+        }
+      ],
+      "dependencies": []
+    },
+    {
+      "type": "transform",
+      "id": "004-transform-migrate-sql-managed-identity",
+      "description": "Migrate the database connection from a local SQL Server LocalDB connection string to Azure SQL Database using Managed Identity authentication.",
+      "reason": "The current connection string targets local SQL Server LocalDB and, in provisioned infrastructure, relies on an embedded SQL login/password; this is not appropriate for a cloud deployment and removes a stored credential in favor of passwordless authentication.",
+      "requirements": "Update the EF Core DbContext configuration and connection string handling so the application connects to Azure SQL Database using Managed Identity (DefaultAzureCredential) instead of a SQL login/password. Preserve existing EF Core migrations, model configuration, and startup migration-apply behavior.",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "skills": [
+        {
+          "name": "migration-azure-sql-database",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-managed-identity",
+          "location": "builtin"
+        }
+      ],
+      "dependencies": ["003-transform-migrate-local-storage-to-blob"]
+    },
+    {
+      "type": "integrationTest",
+      "id": "005-integrationTest",
+      "description": "Build integration tests for migrated Azure services and run post-migration verification",
+      "reason": "Verifies that photo upload, retrieval, and deletion behavior against Azure Blob Storage and Azure SQL Database matches the frozen baseline before proceeding to security remediation and deployment.",
+      "requirements": "Using the infra-decision-table and frozen test specification from the setupBaseline task and the infrastructure provisioned in the infrastructure task, add integration tests covering photo upload, listing, detail view, and deletion against the migrated Azure Blob Storage and Azure SQL Database, and verify results against the baseline.",
+      "dependencies": [
+        "001-setupBaseline",
+        "002-infrastructure",
+        "003-transform-migrate-local-storage-to-blob",
+        "004-transform-migrate-sql-managed-identity"
+      ]
+    },
+    {
+      "type": "security",
+      "id": "006-security-cve-remediation",
+      "description": "Scan all project dependencies for known CVEs and remediate any identified vulnerabilities to ensure the application is secure before deployment.",
+      "reason": "Ensures the modernized application is free of known security vulnerabilities before it is deployed to Azure.",
+      "requirements": "Upgrade vulnerable dependencies to the minimum patched version. If a CVE fix requires a major version upgrade, document the affected dependency, the current version, the upgraded major version, and the breaking change risk. Verify that the project builds and all tests pass after remediation.",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "skills": [
+        {
+          "name": "validate-cves-and-fix",
+          "location": "builtin"
+        }
+      ],
+      "dependencies": ["005-integrationTest"]
+    },
+    {
+      "type": "deployment",
+      "id": "007-deployment-azure-container-apps",
+      "description": "Containerize and deploy PhotoAlbum to Azure Container Apps using the provisioned infrastructure.",
+      "reason": "Delivers the modernized application to Azure so it runs against the provisioned Container Apps environment, Azure SQL Database, and Storage Account.",
+      "requirements": "Build/update the Dockerfile as needed and deploy the PhotoAlbum container to the Azure Container Apps environment provisioned in the infrastructure task, configuring the Container App to use its Managed Identity for Azure SQL Database and Azure Storage Account access.",
+      "targetAzureService": "azurecontainerapp",
+      "resourceStatus": "Using infrastructure provisioned by task 002-infrastructure",
+      "deploymentTool": "bicep",
+      "skills": [
+        {
+          "name": "azcli-containerapp-deploy",
+          "location": "builtin"
+        }
+      ],
+      "dependencies": ["006-security-cve-remediation"]
+    }
+  ],
+  "metadata": {
+    "planName": "cloud-modernization-plan",
+    "projectName": "PhotoAlbum",
+    "language": "dotnet",
+    "createdAt": "2026-09-22T09:28:00Z",
+    "version": "1.0"
+  }
+}
